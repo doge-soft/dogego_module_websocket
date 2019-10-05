@@ -10,17 +10,22 @@ import (
 type Connection struct {
 	websocketConnection *websocket.Conn
 	inChan              chan []byte
-	outChan             chan []byte
+	outChan             chan Message
 	closeChan           chan byte
 	closeMutex          sync.Mutex
 	isClosed            bool
+}
+
+type Message struct {
+	Type    int
+	Message []byte
 }
 
 func NewConnection(wsConnection *websocket.Conn) (*Connection, error) {
 	connection := &Connection{
 		websocketConnection: wsConnection,
 		inChan:              make(chan []byte, 5000),
-		outChan:             make(chan []byte, 5000),
+		outChan:             make(chan Message, 5000),
 		closeChan:           make(chan byte, 1),
 		closeMutex:          sync.Mutex{},
 	}
@@ -61,25 +66,25 @@ func (conn *Connection) Read() (chan []byte, error) {
 	return channel, nil
 }
 
-func (conn *Connection) Write() (chan []byte, error) {
-	channel := make(chan []byte, 5000)
+func (conn *Connection) Write() (chan Message, error) {
+	channel := make(chan Message, 5000)
 
 	go func() {
 		select {
 		case data := <-channel:
-			err := conn.WriteMessage(data)
-			if err != nil {
-				log.Println(err)
-			}
+			conn.outChan <- data
 		}
 	}()
 
 	return channel, nil
 }
 
-func (conn *Connection) WriteMessage(message []byte) error {
+func (conn *Connection) WriteMessage(message_type int, message []byte) error {
 	select {
-	case conn.outChan <- message:
+	case conn.outChan <- Message{
+		Type:    message_type,
+		Message: message,
+	}:
 	case <-conn.closeChan:
 		return errors.New("connection is closed.")
 	}
@@ -119,7 +124,7 @@ func (conn *Connection) writeLoop() {
 	for {
 		select {
 		case data := <-conn.outChan:
-			if err := conn.websocketConnection.WriteMessage(websocket.TextMessage, data); err != nil {
+			if err := conn.websocketConnection.WriteMessage(data.Type, data.Message); err != nil {
 				goto ERR
 			}
 		case <-conn.closeChan:
